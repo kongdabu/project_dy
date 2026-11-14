@@ -1,13 +1,23 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.routers import auth, documents, history, study
 from app.services.supabase_service import store
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """서버 기동 시 필수 보안 설정(PORTAL_PASSCODE, AUTH_SECRET) 검증"""
+    settings.validate_security_config()
+    yield
+
+
 app = FastAPI(
     title="MedStudy Portal API",
     description="의대생을 위한 AI 학습 포털 (요약·의학용어·근거링크·마인드맵·예상문제·플래시카드·파인만 튜터)",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
