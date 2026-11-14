@@ -96,6 +96,7 @@ export default function SummaryTab({
                   <button
                     key={rIdx}
                     type="button"
+                    data-keep-viewer="true"
                     onClick={() => onJumpToPage(ref.page, ref.quote)}
                     className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-left text-[11px] font-medium text-slate-700 transition hover:border-teal-300 hover:bg-teal-50 hover:text-teal-800"
                   >
@@ -125,6 +126,7 @@ export default function SummaryTab({
                 <h4 className="text-sm font-bold text-teal-800">{item.term}</h4>
                 <button
                   type="button"
+                  data-keep-viewer="true"
                   onClick={() => onJumpToPage(item.page || 1)}
                   className="shrink-0 rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 hover:bg-teal-50 hover:text-teal-700"
                 >

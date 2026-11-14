@@ -11,6 +11,8 @@ import {
   Layers,
   Loader2,
   Network,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type {
@@ -40,6 +42,7 @@ export default function StudyWorkspacePage() {
   const [feynmanSessions, setFeynmanSessions] = useState<FeynmanSession[]>([]);
 
   const [activeTab, setActiveTab] = useState<StudyTabKey>("summary");
+  const [showLeftViewer, setShowLeftViewer] = useState(true);
   const [activePage, setActivePage] = useState(1);
   const [activeQuote, setActiveQuote] = useState("");
 
@@ -88,6 +91,7 @@ export default function StudyWorkspacePage() {
 
   const handleJumpToPage = (page: number, quote = "") => {
     const safePage = Math.max(1, Math.min(doc?.total_pages || 1, page));
+    setShowLeftViewer(true);
     setActivePage(safePage);
     setActiveQuote(quote);
   };
@@ -219,25 +223,52 @@ export default function StudyWorkspacePage() {
             </div>
           </div>
         </div>
+
+        <button
+          type="button"
+          onClick={() => setShowLeftViewer((prev) => !prev)}
+          className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-2xs transition hover:bg-slate-100"
+        >
+          {showLeftViewer ? (
+            <>
+              <PanelLeftClose className="h-3.5 w-3.5 text-teal-600" />
+              <span>원본 자료 닫기 (전체 보기)</span>
+            </>
+          ) : (
+            <>
+              <PanelLeftOpen className="h-3.5 w-3.5 text-teal-600" />
+              <span>원본 자료 열기</span>
+            </>
+          )}
+        </button>
       </div>
 
       {/* 2단 Split View */}
-      <div className="grid flex-1 gap-4 overflow-hidden lg:grid-cols-12">
-        {/* 좌측: 원본 문서 뷰어 (5컬럼 ~42%) */}
-        <div className="h-[420px] lg:col-span-5 lg:h-full overflow-hidden">
-          <DocumentViewer
-            doc={doc}
-            activePage={activePage}
-            activeQuote={activeQuote}
-            onPageChange={(p) => {
-              setActivePage(p);
-              setActiveQuote("");
-            }}
-          />
-        </div>
+      <div className="flex flex-1 flex-col gap-4 overflow-hidden lg:flex-row">
+        {/* 좌측: 원본 문서 뷰어 (초기 44%, 우측 클릭 시 닫힘) */}
+        {showLeftViewer && (
+          <div className="h-[420px] min-w-0 shrink-0 overflow-hidden lg:h-full lg:w-[44%]">
+            <DocumentViewer
+              doc={doc}
+              activePage={activePage}
+              activeQuote={activeQuote}
+              onPageChange={(p) => {
+                setActivePage(p);
+                setActiveQuote("");
+              }}
+            />
+          </div>
+        )}
 
-        {/* 우측: 5대 AI 학습 스튜디오 (7컬럼 ~58%) */}
-        <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+        {/* 우측: 5대 AI 학습 스튜디오 (초기 56%, 클릭 시 좌측 닫히고 100% 확장) */}
+        <div
+          onClick={(e) => {
+            const target = e.target as HTMLElement;
+            if (target.closest("[data-keep-viewer='true']")) return;
+            if (showLeftViewer) setShowLeftViewer(false);
+          }}
+          className="flex h-full min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-slate-50"
+        >
           {/* 탭 헤더 */}
           <div className="flex items-center gap-1 overflow-x-auto border-b border-slate-200 bg-white px-3 py-2">
             {tabs.map((tab) => {

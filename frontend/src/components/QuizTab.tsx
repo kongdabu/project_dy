@@ -321,6 +321,7 @@ export default function QuizTab({
                     {res.source_reference?.page && (
                       <button
                         type="button"
+                        data-keep-viewer="true"
                         onClick={() =>
                           onJumpToPage(res.source_reference.page, res.source_reference.quote)
                         }

@@ -151,6 +151,7 @@ export default function FeynmanTab({
                   </p>
                   <button
                     type="button"
+                    data-keep-viewer="true"
                     onClick={() => onJumpToPage(fb.reference_page || 1)}
                     className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-teal-700 hover:bg-teal-50"
                   >
