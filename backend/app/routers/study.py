@@ -38,6 +38,7 @@ def create_summary(doc_id: str):
             title=doc["title"],
         )
     except ValueError as exc:
+        logger.warning("AI 요약 생성 400 오류 (doc_id=%s): %s", doc_id, exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception:
         logger.exception("AI 요약 생성 실패 (doc_id=%s)", doc_id)
@@ -61,6 +62,7 @@ def create_quiz(doc_id: str, body: GenerateQuizRequest):
     """자료 기반 4지선다 및 서술형 예상문제 세트 생성"""
     doc = _get_doc_or_404(doc_id)
     if body.mcq_count + body.essay_count == 0:
+        logger.warning("예상문제 생성 400 오류 (doc_id=%s): 문항 수 0개", doc_id)
         raise HTTPException(status_code=400, detail="최소 1문항 이상 생성해야 합니다.")
 
     try:
@@ -72,6 +74,7 @@ def create_quiz(doc_id: str, body: GenerateQuizRequest):
             difficulty=body.difficulty,
         )
     except ValueError as exc:
+        logger.warning("예상문제 생성 400 오류 (doc_id=%s): %s", doc_id, exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception:
         logger.exception("예상문제 생성 실패 (doc_id=%s)", doc_id)
@@ -186,6 +189,7 @@ def create_flashcards(doc_id: str, body: GenerateFlashcardsRequest):
             count=body.count,
         )
     except ValueError as exc:
+        logger.warning("플래시카드 생성 400 오류 (doc_id=%s): %s", doc_id, exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception:
         logger.exception("플래시카드 생성 실패 (doc_id=%s)", doc_id)
@@ -226,6 +230,7 @@ def evaluate_feynman(doc_id: str, body: FeynmanRequest):
             user_explanation=body.user_explanation,
         )
     except ValueError as exc:
+        logger.warning("파인만 평가 400 오류 (doc_id=%s): %s", doc_id, exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception:
         logger.exception("파인만 평가 실패 (doc_id=%s)", doc_id)
