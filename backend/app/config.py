@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     allow_insecure_dev_auth: bool = False
 
     # 업로드 및 AI 호출 제한
-    max_upload_mb: int = 20
-    max_document_pages: int = 150
+    max_upload_mb: int = 500
+    max_document_pages: int = 500
     ai_rate_limit_per_minute: int = 15
     ai_rate_limit_per_day: int = 150
 
