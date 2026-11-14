@@ -8,6 +8,9 @@ MIN_AUTH_SECRET_LENGTH = 32
 class Settings(BaseSettings):
     """애플리케이션 환경 변수 설정"""
 
+    ai_provider: str = "openrouter"
+    openrouter_api_key: str = ""
+    openrouter_model: str = "qwen/qwen3.7-flash"
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
     supabase_url: str = ""

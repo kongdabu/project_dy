@@ -43,9 +43,14 @@ def root():
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health_check():
     """서버 및 저장소 상태 확인"""
+    provider = (settings.ai_provider or "openrouter").strip().lower()
+    active_model = (
+        settings.openrouter_model if provider == "openrouter" else settings.gemini_model
+    )
     return {
         "status": "ok",
         "storage_mode": "supabase" if store.is_supabase else "local_fallback",
-        "gemini_model": settings.gemini_model,
+        "ai_provider": provider,
+        "ai_model": active_model,
         "auth_enabled": settings.is_auth_enabled,
     }

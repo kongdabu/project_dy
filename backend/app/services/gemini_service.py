@@ -1,4 +1,7 @@
+import json
+import re
 from typing import Optional
+import httpx
 from google import genai
 from google.genai import types
 from app.config import settings
@@ -9,6 +12,17 @@ from app.schemas.models import (
     QuizGeneratedOutput,
     SummaryOutput,
 )
+
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+
+def _extract_json_text(raw_text: str) -> str:
+    """모델 응답에서 마크다운 코드 블록을 제거하고 순수 JSON 문자열만 추출"""
+    text = (raw_text or "").strip()
+    fenced_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
+    if fenced_match:
+        return fenced_match.group(1).strip()
+    return text
 
 
 def _format_pages_context(pages: list[dict], max_chars: int = 180000) -> str:
@@ -26,16 +40,79 @@ def _format_pages_context(pages: list[dict], max_chars: int = 180000) -> str:
 
 
 class GeminiService:
-    """Google Gemini API를 활용한 의학 학습 AI 엔진"""
+    """OpenRouter(Qwen 등) 및 Google Gemini API를 지원하는 의학 학습 AI 엔진"""
 
     @staticmethod
-    def _get_client(custom_api_key: Optional[str] = None) -> genai.Client:
+    def _get_openrouter_api_key() -> str:
+        api_key = (settings.openrouter_api_key or "").strip()
+        if not api_key or "your_openrouter_api_key" in api_key:
+            raise ValueError(
+                "OpenRouter API 키가 설정되지 않았습니다. backend/.env 또는 Render.com의 OPENROUTER_API_KEY 환경변수를 설정해 주세요."
+            )
+        return api_key
+
+    @staticmethod
+    def _get_gemini_client(custom_api_key: Optional[str] = None) -> genai.Client:
         api_key = (settings.gemini_api_key or "").strip()
         if not api_key or "your_gemini_api_key" in api_key:
             raise ValueError(
                 "Gemini API 키가 설정되지 않았습니다. backend/.env 또는 Render.com의 GEMINI_API_KEY 환경변수를 설정해 주세요."
             )
         return genai.Client(api_key=api_key)
+
+    def _generate_structured_openrouter(
+        self,
+        prompt: str,
+        response_schema: type,
+        temperature: float = 0.2,
+    ):
+        """OpenRouter Chat Completions API를 호출하여 JSON 스키마 기반 구조화 응답 생성"""
+        api_key = self._get_openrouter_api_key()
+        schema_json = json.dumps(response_schema.model_json_schema(), ensure_ascii=False)
+        system_prompt = (
+            "당신은 의학 교육 AI 어시스턴트입니다. 반드시 아래 JSON Schema를 정확히 준수하는 "
+            "단일 JSON 객체만 출력하세요. 설명 문장이나 마크다운 코드블록(```)을 덧붙이지 마세요.\n\n"
+            f"[JSON Schema]\n{schema_json}"
+        )
+
+        payload = {
+            "model": settings.openrouter_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": temperature,
+            "response_format": {"type": "json_object"},
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://medstudy-portal.local",
+            "X-Title": "MedStudy Portal",
+        }
+
+        with httpx.Client(timeout=120.0) as client:
+            res = client.post(OPENROUTER_API_URL, headers=headers, json=payload)
+
+        if res.status_code >= 400:
+            raise ValueError(f"OpenRouter API 호출 실패 ({res.status_code}): {res.text[:300]}")
+
+        data = res.json()
+        choices = data.get("choices") or []
+        if not choices:
+            raise ValueError("OpenRouter API 응답에 choices가 비어 있습니다.")
+
+        message_content = (choices[0].get("message") or {}).get("content")
+        if isinstance(message_content, list):
+            # 멀티모달/파트 배열 응답 대응
+            message_content = "".join(
+                part.get("text", "") for part in message_content if isinstance(part, dict)
+            )
+        if not message_content or not isinstance(message_content, str):
+            raise ValueError("OpenRouter API 응답 본문이 비어 있습니다.")
+
+        cleaned = _extract_json_text(message_content)
+        return response_schema.model_validate_json(cleaned)
 
     def _generate_structured(
         self,
@@ -44,8 +121,16 @@ class GeminiService:
         custom_api_key: Optional[str] = None,
         temperature: float = 0.2,
     ):
-        """Structured Output(JSON Schema) 기반 Gemini 호출 공통 헬퍼"""
-        client = self._get_client(custom_api_key)
+        """Structured Output(JSON Schema) 기반 AI 호출 공통 헬퍼"""
+        provider = (settings.ai_provider or "openrouter").strip().lower()
+        if provider == "openrouter":
+            return self._generate_structured_openrouter(
+                prompt=prompt,
+                response_schema=response_schema,
+                temperature=temperature,
+            )
+
+        client = self._get_gemini_client(custom_api_key)
         response = client.models.generate_content(
             model=settings.gemini_model,
             contents=prompt,
