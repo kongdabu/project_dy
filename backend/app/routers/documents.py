@@ -1,10 +1,18 @@
+import logging
 from typing import Optional
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
-from app.services.document_parser import parse_document_bytes
+from app.config import settings
+from app.services.auth_service import require_auth
+from app.services.document_parser import parse_document_bytes, validate_file_extension
 from app.services.supabase_service import store
 
-router = APIRouter(prefix="/api/documents", tags=["documents"])
+logger = logging.getLogger(__name__)
+router = APIRouter(
+    prefix="/api/documents",
+    tags=["documents"],
+    dependencies=[Depends(require_auth)],
+)
 
 
 @router.post("/upload")
@@ -13,18 +21,32 @@ async def upload_document(
     title: Optional[str] = Form(default=None),
     category: str = Form(default="일반의학"),
 ):
-    """학습 자료(PDF, DOCX, PPTX, TXT) 업로드 및 페이지별 텍스트 파싱"""
+    """학습 자료(PDF, DOCX, PPTX, TXT, MD) 업로드 및 페이지별 텍스트 파싱"""
     if not file.filename:
         raise HTTPException(status_code=400, detail="파일명이 비어 있습니다.")
 
-    file_bytes = await file.read()
+    try:
+        validate_file_extension(file.filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    file_bytes = await file.read(max_bytes + 1)
     if not file_bytes:
         raise HTTPException(status_code=400, detail="빈 파일은 업로드할 수 없습니다.")
+    if len(file_bytes) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"파일 크기가 최대 제한({settings.max_upload_mb}MB)을 초과했습니다.",
+        )
 
     try:
         pages, ext, total_pages = parse_document_bytes(file_bytes, file.filename)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"문서 파싱 중 오류가 발생했습니다: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        logger.exception("문서 파싱 실패: %s", file.filename)
+        raise HTTPException(status_code=400, detail="문서를 읽을 수 없습니다. 손상되지 않은 파일인지 확인해 주세요.")
 
     doc_title = (title or "").strip() or file.filename.rsplit(".", 1)[0]
     content_type = file.content_type or "application/octet-stream"
@@ -54,12 +76,12 @@ def get_local_file(safe_name: str):
     path = store.get_local_file_path(safe_name)
     if not path:
         raise HTTPException(status_code=404, detail="파일을 찾을 수 없습니다.")
-    return FileResponse(path)
+    return FileResponse(path, headers={"X-Content-Type-Options": "nosniff"})
 
 
 @router.get("/{doc_id}")
 def get_document(doc_id: str):
-    """특정 학습 자료 상세 조회 (페이지별 원문 포함)"""
+    """특정 학습 자료 상세 조회 (페이지별 원문 및 서명 URL 포함)"""
     doc = store.get_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="학습 자료를 찾을 수 없습니다.")
@@ -68,7 +90,7 @@ def get_document(doc_id: str):
 
 @router.delete("/{doc_id}")
 def delete_document(doc_id: str):
-    """학습 자료 및 연관된 요약/문제/카드/이력 삭제"""
+    """학습 자료 및 연관된 요약/문제/카드/이력/Storage 파일 삭제"""
     doc = store.get_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="학습 자료를 찾을 수 없습니다.")

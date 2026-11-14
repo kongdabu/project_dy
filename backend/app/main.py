@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
-from app.routers import documents, history, study
+from app.routers import auth, documents, history, study
 from app.services.supabase_service import store
 
 app = FastAPI(
@@ -18,6 +18,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router)
 app.include_router(documents.router)
 app.include_router(study.router)
 app.include_router(history.router)
@@ -36,4 +37,5 @@ def health_check():
         "status": "ok",
         "storage_mode": "supabase" if store.is_supabase else "local_fallback",
         "gemini_model": settings.gemini_model,
+        "auth_enabled": settings.is_auth_enabled,
     }

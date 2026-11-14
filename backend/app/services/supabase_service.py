@@ -1,10 +1,13 @@
 import json
+import logging
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Optional
 from supabase import create_client, Client
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Supabase 미설정 시 로컬 개발용 폴백 저장소 경로
 LOCAL_STORE_DIR = Path(__file__).resolve().parent.parent.parent / "_local_store"
@@ -48,17 +51,47 @@ class DataStoreService:
     def _now_iso() -> str:
         return datetime.now(timezone.utc).isoformat()
 
+    @staticmethod
+    def _extract_storage_path(file_url: Optional[str]) -> Optional[str]:
+        if not file_url:
+            return None
+        marker = f"/{settings.supabase_bucket}/"
+        if marker in file_url:
+            return file_url.split(marker, 1)[1].split("?", 1)[0]
+        if not file_url.startswith("http") and not file_url.startswith("/api/"):
+            return file_url
+        return None
+
+    def _attach_signed_url(self, doc: dict[str, Any]) -> dict[str, Any]:
+        """비공개 Storage 버킷용 만료 서명 URL(1시간) 동적 발급"""
+        if not self._client or not doc.get("file_url"):
+            return doc
+        storage_path = self._extract_storage_path(doc["file_url"])
+        if not storage_path:
+            return doc
+        try:
+            signed = self._client.storage.from_(settings.supabase_bucket).create_signed_url(
+                storage_path, 3600
+            )
+            signed_url = signed.get("signedURL") or signed.get("signedUrl")
+            if signed_url:
+                return {**doc, "file_url": signed_url}
+        except Exception:
+            logger.exception("서명 URL 생성 실패: %s", storage_path)
+        return doc
+
     # ---------------- 파일 업로드 ----------------
     def upload_file(self, file_bytes: bytes, filename: str, content_type: str) -> str:
-        """파일을 Supabase Storage 또는 로컬 디렉토리에 저장하고 접근 URL/경로 반환"""
-        safe_name = f"{uuid.uuid4().hex}_{filename}"
+        """파일을 비공개 Supabase Storage 또는 로컬 디렉토리에 저장하고 객체 경로 반환"""
+        safe_filename = Path(filename).name
+        safe_name = f"{uuid.uuid4().hex}_{safe_filename}"
         if self._client:
             self._client.storage.from_(settings.supabase_bucket).upload(
                 path=safe_name,
                 file=file_bytes,
                 file_options={"content-type": content_type},
             )
-            return self._client.storage.from_(settings.supabase_bucket).get_public_url(safe_name)
+            return safe_name
 
         local_path = LOCAL_FILES_DIR / safe_name
         local_path.write_bytes(file_bytes)
@@ -79,7 +112,7 @@ class DataStoreService:
         }
         if self._client:
             res = self._client.table("documents").insert(record).execute()
-            return res.data[0]
+            return self._attach_signed_url(res.data[0])
         db = self._load_local_db()
         db["documents"].insert(0, record)
         self._save_local_db(db)
@@ -111,15 +144,32 @@ class DataStoreService:
     def get_document(self, doc_id: str) -> Optional[dict[str, Any]]:
         if self._client:
             res = self._client.table("documents").select("*").eq("id", doc_id).execute()
-            return res.data[0] if res.data else None
+            return self._attach_signed_url(res.data[0]) if res.data else None
         db = self._load_local_db()
         return next((d for d in db["documents"] if d["id"] == doc_id), None)
 
     def delete_document(self, doc_id: str) -> bool:
+        """문서 DB 행과 Storage 원본 파일을 함께 삭제"""
         if self._client:
+            res = self._client.table("documents").select("file_url").eq("id", doc_id).execute()
+            if res.data:
+                storage_path = self._extract_storage_path(res.data[0].get("file_url"))
+                if storage_path:
+                    try:
+                        self._client.storage.from_(settings.supabase_bucket).remove([storage_path])
+                    except Exception:
+                        logger.exception("Storage 파일 삭제 실패: %s", storage_path)
             self._client.table("documents").delete().eq("id", doc_id).execute()
             return True
+
         db = self._load_local_db()
+        target = next((d for d in db["documents"] if d["id"] == doc_id), None)
+        if target and target.get("file_url", "").startswith("/api/documents/local-file/"):
+            safe_name = target["file_url"].rsplit("/", 1)[-1]
+            local_path = self.get_local_file_path(safe_name)
+            if local_path:
+                local_path.unlink(missing_ok=True)
+
         db["documents"] = [d for d in db["documents"] if d["id"] != doc_id]
         db["summaries"] = [s for s in db["summaries"] if s["document_id"] != doc_id]
         quiz_ids = {q["id"] for q in db["quizzes"] if q["document_id"] == doc_id}
@@ -412,4 +462,3 @@ class DataStoreService:
 
 
 store = DataStoreService()
-

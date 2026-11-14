@@ -73,18 +73,10 @@ alter table public.quizzes enable row level security;
 alter table public.quiz_questions enable row level security;
 alter table public.quiz_attempts enable row level security;
 
-create policy "Allow all access on documents" on public.documents for all using (true) with check (true);
-create policy "Allow all access on summaries" on public.summaries for all using (true) with check (true);
-create policy "Allow all access on quizzes" on public.quizzes for all using (true) with check (true);
-create policy "Allow all access on quiz_questions" on public.quiz_questions for all using (true) with check (true);
-create policy "Allow all access on quiz_attempts" on public.quiz_attempts for all using (true) with check (true);
+-- (백엔드 service_role 전용 접근만 허용하고 anon/authenticated 직접 접근 차단)
 
--- Storage 버킷 생성 (원본 PDF/문서 저장용)
+-- Storage 버킷 생성 (원본 PDF/문서 비공개 저장용 - Signed URL로만 접근)
 insert into storage.buckets (id, name, public)
-values ('study-materials', 'study-materials', true)
-on conflict (id) do nothing;
-
--- Storage 정책 설정
-create policy "Public Access study-materials" on storage.objects
-for all using (bucket_id = 'study-materials') with check (bucket_id = 'study-materials');
+values ('study-materials', 'study-materials', false)
+on conflict (id) do update set public = false;
 

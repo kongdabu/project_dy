@@ -16,4 +16,8 @@ services:
         sync: false
       - key: ALLOWED_ORIGINS
         sync: false
+      - key: PORTAL_PASSCODE
+        sync: false
+      - key: AUTH_SECRET
+        sync: false
 

@@ -2,10 +2,17 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpen, History, Stethoscope, Upload } from "lucide-react";
+import { useEffect, useState } from "react";
+import { BookOpen, History, Lock, Stethoscope, Upload } from "lucide-react";
+import { clearAuthToken, getAuthToken } from "@/lib/api";
 
 export default function Navbar() {
   const pathname = usePathname();
+  const [hasToken, setHasToken] = useState(false);
+
+  useEffect(() => {
+    setHasToken(Boolean(getAuthToken()));
+  }, [pathname]);
 
   const navItems = [
     { href: "/", label: "대시보드", icon: BookOpen },
@@ -45,6 +52,17 @@ export default function Navbar() {
             })}
           </nav>
         </div>
+
+        {hasToken && (
+          <button
+            type="button"
+            onClick={() => clearAuthToken()}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+          >
+            <Lock className="h-3.5 w-3.5" />
+            <span>포털 잠금</span>
+          </button>
+        )}
       </div>
     </header>
   );

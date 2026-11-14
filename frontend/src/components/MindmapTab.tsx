@@ -26,7 +26,7 @@ export default function MindmapTab({ mermaidCode, onGenerateSummary }: MindmapTa
         mermaid.initialize({
           startOnLoad: false,
           theme: "neutral",
-          securityLevel: "loose",
+          securityLevel: "strict",
         });
         const cleanCode = mermaidCode
           .replace(/^```mermaid\s*/i, "")

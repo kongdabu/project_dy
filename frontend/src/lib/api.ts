@@ -11,8 +11,34 @@ import type {
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "http://localhost:8000";
 
+const AUTH_TOKEN_KEY = "medstudy_auth_token";
+
+export function getAuthToken(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem(AUTH_TOKEN_KEY) || "";
+}
+
+export function setAuthToken(token: string): void {
+  if (typeof window === "undefined") return;
+  if (token) {
+    localStorage.setItem(AUTH_TOKEN_KEY, token);
+  } else {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+  }
+}
+
+export function clearAuthToken(): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(AUTH_TOKEN_KEY);
+  window.dispatchEvent(new Event("medstudy:auth-expired"));
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers || {});
+  const token = getAuthToken();
+  if (token && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
   if (!(options.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
@@ -22,6 +48,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers,
     cache: "no-store",
   });
+
+  if (res.status === 401 && path !== "/api/auth/login") {
+    clearAuthToken();
+  }
 
   if (!res.ok) {
     let detail = `요청 실패 (${res.status})`;
@@ -41,10 +71,33 @@ export function resolveFileUrl(fileUrl: string): string {
   if (fileUrl.startsWith("http://") || fileUrl.startsWith("https://")) {
     return fileUrl;
   }
-  return `${API_BASE_URL}${fileUrl}`;
+  const token = getAuthToken();
+  const sep = fileUrl.includes("?") ? "&" : "?";
+  return token
+    ? `${API_BASE_URL}${fileUrl}${sep}token=${encodeURIComponent(token)}`
+    : `${API_BASE_URL}${fileUrl}`;
 }
 
 export const api = {
+  // 인증
+  getAuthStatus: () =>
+    request<{ auth_required: boolean; authenticated: boolean }>("/api/auth/status"),
+
+  login: async (passcode: string) => {
+    const res = await request<{
+      access_token: string;
+      token_type: string;
+      auth_required: boolean;
+    }>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ passcode }),
+    });
+    if (res.access_token) {
+      setAuthToken(res.access_token);
+    }
+    return res;
+  },
+
   // 자료 관리
   uploadDocument: async (file: File, title: string, category: string): Promise<StudyDocument> => {
     const formData = new FormData();

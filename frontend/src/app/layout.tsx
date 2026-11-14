@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import AuthGate from "@/components/AuthGate";
 import Navbar from "@/components/Navbar";
 
 export const metadata: Metadata = {
@@ -15,10 +16,11 @@ export default function RootLayout({
   return (
     <html lang="ko">
       <body className="min-h-screen bg-slate-50 text-slate-900 antialiased">
-        <Navbar />
-        <main>{children}</main>
+        <AuthGate>
+          <Navbar />
+          <main>{children}</main>
+        </AuthGate>
       </body>
     </html>
   );
 }
-

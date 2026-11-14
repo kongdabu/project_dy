@@ -1,5 +1,5 @@
-from typing import Optional
-from fastapi import APIRouter, Header, HTTPException
+import logging
+from fastapi import APIRouter, Depends, HTTPException
 from app.schemas.models import (
     FeynmanRequest,
     GenerateFlashcardsRequest,
@@ -7,10 +7,17 @@ from app.schemas.models import (
     ReviewFlashcardRequest,
     SubmitQuizRequest,
 )
+from app.services.auth_service import require_auth
 from app.services.gemini_service import gemini_service
+from app.services.rate_limiter import enforce_ai_rate_limit
 from app.services.supabase_service import store
 
-router = APIRouter(prefix="/api", tags=["study"])
+logger = logging.getLogger(__name__)
+router = APIRouter(
+    prefix="/api",
+    tags=["study"],
+    dependencies=[Depends(require_auth)],
+)
 
 
 def _get_doc_or_404(doc_id: str) -> dict:
@@ -21,23 +28,20 @@ def _get_doc_or_404(doc_id: str) -> dict:
 
 
 # ---------------- 1. 요약 + 의학용어 + AI 마인드맵 ----------------
-@router.post("/study/{doc_id}/summarize")
-def create_summary(
-    doc_id: str,
-    x_gemini_api_key: Optional[str] = Header(default=None),
-):
+@router.post("/study/{doc_id}/summarize", dependencies=[Depends(enforce_ai_rate_limit)])
+def create_summary(doc_id: str):
     """자료 기반 핵심 요약, 의학용어 쉬운 해설, 근거 링크, Mermaid 마인드맵 생성"""
     doc = _get_doc_or_404(doc_id)
     try:
         result = gemini_service.generate_summary_and_mindmap(
             pages=doc.get("page_contents", []),
             title=doc["title"],
-            custom_api_key=x_gemini_api_key,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"AI 요약 생성 실패: {exc}") from exc
+    except Exception:
+        logger.exception("AI 요약 생성 실패 (doc_id=%s)", doc_id)
+        raise HTTPException(status_code=500, detail="AI 요약 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.")
 
     saved = store.save_summary(doc_id, result.model_dump())
     return saved
@@ -52,12 +56,8 @@ def get_summary(doc_id: str):
 
 
 # ---------------- 2. 예상문제 (4지선다 + 서술형) ----------------
-@router.post("/study/{doc_id}/quizzes")
-def create_quiz(
-    doc_id: str,
-    body: GenerateQuizRequest,
-    x_gemini_api_key: Optional[str] = Header(default=None),
-):
+@router.post("/study/{doc_id}/quizzes", dependencies=[Depends(enforce_ai_rate_limit)])
+def create_quiz(doc_id: str, body: GenerateQuizRequest):
     """자료 기반 4지선다 및 서술형 예상문제 세트 생성"""
     doc = _get_doc_or_404(doc_id)
     if body.mcq_count + body.essay_count == 0:
@@ -70,12 +70,12 @@ def create_quiz(
             mcq_count=body.mcq_count,
             essay_count=body.essay_count,
             difficulty=body.difficulty,
-            custom_api_key=x_gemini_api_key,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"예상문제 생성 실패: {exc}") from exc
+    except Exception:
+        logger.exception("예상문제 생성 실패 (doc_id=%s)", doc_id)
+        raise HTTPException(status_code=500, detail="예상문제 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.")
 
     questions_payload = [q.model_dump() for q in generated.questions]
     saved = store.create_quiz_with_questions(
@@ -94,12 +94,8 @@ def list_doc_quizzes(doc_id: str):
     return {"quizzes": store.list_quizzes_for_document(doc_id)}
 
 
-@router.post("/quizzes/{quiz_id}/submit")
-def submit_quiz(
-    quiz_id: str,
-    body: SubmitQuizRequest,
-    x_gemini_api_key: Optional[str] = Header(default=None),
-):
+@router.post("/quizzes/{quiz_id}/submit", dependencies=[Depends(enforce_ai_rate_limit)])
+def submit_quiz(quiz_id: str, body: SubmitQuizRequest):
     """문제 풀이 제출 -> 객관식 즉시 채점 + 서술형 AI 부분점수 채점 + 이력 저장"""
     quiz = store.get_quiz_with_questions(quiz_id)
     if not quiz:
@@ -125,7 +121,6 @@ def submit_quiz(
                 "source_reference": q.get("source_reference", {}),
             })
         else:
-            # 서술형: Gemini AI 채점 시도, 키가 없거나 실패 시 키워드 매칭 폴백
             keywords = q.get("keywords") or []
             try:
                 grade = gemini_service.grade_essay(
@@ -133,9 +128,9 @@ def submit_quiz(
                     model_answer=q["correct_answer"],
                     keywords=keywords,
                     user_answer=user_ans or "(미작성)",
-                    custom_api_key=x_gemini_api_key,
                 ).model_dump()
             except Exception:
+                logger.warning("서술형 AI 채점 폴백 사용 (question_id=%s)", q["id"])
                 matched = [kw for kw in keywords if kw.lower() in user_ans.lower()]
                 missing = [kw for kw in keywords if kw not in matched]
                 ratio = int((len(matched) / len(keywords)) * 100) if keywords else (100 if user_ans else 0)
@@ -179,13 +174,9 @@ def submit_quiz(
     }
 
 
-# ---------------- 3. AI 플래시카드 (Tikonote 벤치마킹) ----------------
-@router.post("/study/{doc_id}/flashcards")
-def create_flashcards(
-    doc_id: str,
-    body: GenerateFlashcardsRequest,
-    x_gemini_api_key: Optional[str] = Header(default=None),
-):
+# ---------------- 3. AI 플래시카드 ----------------
+@router.post("/study/{doc_id}/flashcards", dependencies=[Depends(enforce_ai_rate_limit)])
+def create_flashcards(doc_id: str, body: GenerateFlashcardsRequest):
     """자료 기반 AI 플래시카드 자동 생성"""
     doc = _get_doc_or_404(doc_id)
     try:
@@ -193,12 +184,12 @@ def create_flashcards(
             pages=doc.get("page_contents", []),
             title=doc["title"],
             count=body.count,
-            custom_api_key=x_gemini_api_key,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"플래시카드 생성 실패: {exc}") from exc
+    except Exception:
+        logger.exception("플래시카드 생성 실패 (doc_id=%s)", doc_id)
+        raise HTTPException(status_code=500, detail="플래시카드 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.")
 
     saved = store.create_flashcards(doc_id, [c.model_dump() for c in generated.cards])
     return {"flashcards": saved}
@@ -220,13 +211,9 @@ def review_flashcard(card_id: str, body: ReviewFlashcardRequest):
     return updated
 
 
-# ---------------- 4. 파인만 & 블러팅 AI 튜터 (Tikonote 벤치마킹) ----------------
-@router.post("/study/{doc_id}/feynman")
-def evaluate_feynman(
-    doc_id: str,
-    body: FeynmanRequest,
-    x_gemini_api_key: Optional[str] = Header(default=None),
-):
+# ---------------- 4. 파인만 & 블러팅 AI 튜터 ----------------
+@router.post("/study/{doc_id}/feynman", dependencies=[Depends(enforce_ai_rate_limit)])
+def evaluate_feynman(doc_id: str, body: FeynmanRequest):
     """파인만/블러팅 백지 인출 서술 평가 및 피드백"""
     doc = _get_doc_or_404(doc_id)
     if not body.user_explanation.strip():
@@ -237,12 +224,12 @@ def evaluate_feynman(
             title=doc["title"],
             topic=body.topic,
             user_explanation=body.user_explanation,
-            custom_api_key=x_gemini_api_key,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"파인만 평가 실패: {exc}") from exc
+    except Exception:
+        logger.exception("파인만 평가 실패 (doc_id=%s)", doc_id)
+        raise HTTPException(status_code=500, detail="파인만 평가 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.")
 
     saved = store.save_feynman_session(
         doc_id=doc_id,
@@ -258,4 +245,3 @@ def list_feynman_sessions(doc_id: str):
     """자료에 속한 파인만/블러팅 평가 이력 조회"""
     _get_doc_or_404(doc_id)
     return {"sessions": store.list_feynman_sessions(doc_id)}
-

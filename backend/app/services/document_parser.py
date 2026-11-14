@@ -3,24 +3,34 @@ from typing import Tuple
 import pymupdf
 from docx import Document as DocxDocument
 from pptx import Presentation
+from app.config import settings
+
+ALLOWED_EXTENSIONS = {"pdf", "docx", "doc", "pptx", "txt", "md"}
+
+
+def validate_file_extension(filename: str) -> str:
+    """허용된 학습 자료 확장자인지 검증한다."""
+    if "." not in filename:
+        raise ValueError("파일 확장자가 없습니다. (허용: PDF, DOCX, PPTX, TXT, MD)")
+    ext = filename.rsplit(".", 1)[-1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise ValueError(f"지원하지 않는 파일 형식(.{ext})입니다. (허용: PDF, DOCX, PPTX, TXT, MD)")
+    return ext
 
 
 def parse_document_bytes(file_bytes: bytes, filename: str) -> Tuple[list[dict], str, int]:
     """
     업로드된 파일 바이트(PDF, DOCX, PPTX, TXT/MD)에서 페이지/슬라이드별 텍스트를 추출한다.
-
-    Args:
-        file_bytes: 원본 파일 바이너리
-        filename: 원본 파일명
-
-    Returns:
-        (페이지별 텍스트 리스트, 파일 확장자, 전체 페이지 수)
+    최대 페이지 수 제한을 초과하면 예외를 발생시킨다.
     """
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "txt"
+    ext = validate_file_extension(filename)
     pages: list[dict] = []
+    max_pages = settings.max_document_pages
 
     if ext == "pdf":
         with pymupdf.open(stream=file_bytes, filetype="pdf") as pdf_doc:
+            if len(pdf_doc) > max_pages:
+                raise ValueError(f"PDF 최대 페이지 제한({max_pages}페이지)을 초과했습니다.")
             for idx, page in enumerate(pdf_doc, start=1):
                 text = page.get_text("text").strip()
                 pages.append({"page": idx, "text": text})
@@ -29,6 +39,8 @@ def parse_document_bytes(file_bytes: bytes, filename: str) -> Tuple[list[dict], 
 
     if ext == "pptx":
         prs = Presentation(io.BytesIO(file_bytes))
+        if len(prs.slides) > max_pages:
+            raise ValueError(f"PPTX 최대 슬라이드 제한({max_pages}장)을 초과했습니다.")
         for idx, slide in enumerate(prs.slides, start=1):
             slide_texts: list[str] = []
             for shape in slide.shapes:
@@ -59,6 +71,8 @@ def parse_document_bytes(file_bytes: bytes, filename: str) -> Tuple[list[dict], 
             if current_len >= chunk_size:
                 pages.append({"page": page_num, "text": "\n".join(current_chunk)})
                 page_num += 1
+                if page_num > max_pages:
+                    raise ValueError(f"문서 최대 분량 제한({max_pages}페이지)을 초과했습니다.")
                 current_chunk = []
                 current_len = 0
         if current_chunk:
@@ -74,5 +88,7 @@ def parse_document_bytes(file_bytes: bytes, filename: str) -> Tuple[list[dict], 
         pages.append({"page": 1, "text": ""})
     else:
         for idx in range(0, len(decoded), chunk_size):
+            if len(pages) >= max_pages:
+                raise ValueError(f"텍스트 최대 분량 제한({max_pages}페이지)을 초과했습니다.")
             pages.append({"page": (idx // chunk_size) + 1, "text": decoded[idx : idx + chunk_size]})
     return pages, ext, len(pages)
