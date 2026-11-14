@@ -23,7 +23,13 @@ app.include_router(study.router)
 app.include_router(history.router)
 
 
-@app.get("/health")
+@app.api_route("/", methods=["GET", "HEAD"])
+def root():
+    """Render 기본 헬스체크(HEAD /) 및 루트 접속용 200 OK 응답"""
+    return {"service": "MedStudy Portal API", "status": "ok"}
+
+
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health_check():
     """서버 및 저장소 상태 확인"""
     return {
@@ -31,4 +37,3 @@ def health_check():
         "storage_mode": "supabase" if store.is_supabase else "local_fallback",
         "gemini_model": settings.gemini_model,
     }
-
