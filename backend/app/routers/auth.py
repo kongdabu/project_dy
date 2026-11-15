@@ -8,19 +8,13 @@ from app.services.auth_service import (
     verify_access_token,
     verify_passcode,
 )
+from app.services.rate_limiter import get_client_ip
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 class LoginRequest(BaseModel):
     passcode: str
-
-
-def _get_client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-    if forwarded:
-        return forwarded
-    return request.client.host if request.client else "unknown"
 
 
 @router.get("/status")
@@ -45,7 +39,7 @@ def login(request: Request, body: LoginRequest):
     if settings.allow_insecure_dev_auth:
         return {"access_token": "", "token_type": "bearer", "auth_required": False}
 
-    client_ip = _get_client_ip(request)
+    client_ip = get_client_ip(request)
     login_rate_limiter.check_allowed(client_ip)
 
     if not verify_passcode(body.passcode):
