@@ -1,11 +1,11 @@
 import logging
 import time
 from typing import Optional
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 from app.config import settings
-from app.services.audio_service import get_audio_mime_type
+from app.services.audio_service import get_audio_mime_type, proofread_pages_with_llm
 from app.services.auth_service import require_auth
 from app.services.document_parser import is_audio_extension, parse_document_bytes, validate_file_extension
 from app.services.supabase_service import store
@@ -18,8 +18,20 @@ router = APIRouter(
 )
 
 
+def _run_audio_proofread_task(doc_id: str, pages: list[dict], filename: str) -> None:
+    """업로드 응답 반환 이후 백그라운드에서 음성 전사 문맥 교정을 수행하고 DB 갱신"""
+    try:
+        corrected = proofread_pages_with_llm(pages, filename)
+        if corrected != pages:
+            store.update_document_pages(doc_id, corrected)
+            logger.info("[Upload][Background] 음성 전사 문맥 교정 DB 반영 완료: doc_id=%s, filename=%s", doc_id, filename)
+    except Exception:
+        logger.exception("[Upload][Background] 음성 전사 문맥 교정 반영 실패: doc_id=%s, filename=%s", doc_id, filename)
+
+
 @router.post("/upload")
 async def upload_document(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     title: Optional[str] = Form(default=None),
     category: str = Form(default="일반의학"),
@@ -120,6 +132,14 @@ async def upload_document(
             "page_contents": pages,
         },
     )
+    if is_audio and settings.stt_post_edit and pages:
+        background_tasks.add_task(_run_audio_proofread_task, doc_record["id"], pages, file.filename)
+        logger.info(
+            "[Upload] 백그라운드 문맥 교정 태스크 예약 완료: doc_id=%s, pages=%d",
+            doc_record.get("id"),
+            len(pages),
+        )
+
     logger.info(
         "[Upload] 최종 완료: doc_id=%s, filename=%s, is_audio=%s, total_pages=%d, total_elapsed=%.2fs",
         doc_record.get("id"),

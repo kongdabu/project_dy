@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import logging
 import os
 import tempfile
@@ -162,9 +163,47 @@ def _filter_whisper_segments(raw_segments: list[dict]) -> tuple[list[TranscriptS
     return kept, dropped
 
 
-def _proofread_pages_with_llm(pages: list[dict], filename: str) -> list[dict]:
-    """전사된 텍스트의 오인식·띄어쓰기·의학용어를 OpenRouter LLM으로 문맥 교정 (실패 시 원문 폴백)"""
-    if not settings.stt_post_edit:
+def _proofread_single_page(page_obj: dict, headers: dict, system_prompt: str) -> dict:
+    """단일 구간의 전사 텍스트를 OpenRouter LLM으로 문맥 교정"""
+    orig_text = (page_obj.get("text") or "").strip()
+    if not orig_text:
+        return page_obj
+
+    payload = {
+        "model": settings.openrouter_model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": orig_text},
+        ],
+        "temperature": 0.1,
+    }
+    try:
+        with httpx.Client(timeout=90.0) as client:
+            res = client.post(OPENROUTER_CHAT_URL, headers=headers, json=payload)
+        if res.status_code >= 400:
+            logger.warning(
+                "[Audio STT][Proofread] 구간 %s 교정 실패 (status=%d), 원문 유지",
+                page_obj.get("page"),
+                res.status_code,
+            )
+            return page_obj
+
+        choices = (res.json() or {}).get("choices") or []
+        edited = ((choices[0].get("message") or {}).get("content") or "").strip() if choices else ""
+        if edited:
+            return {"page": page_obj["page"], "text": edited}
+        return page_obj
+    except Exception:
+        logger.warning(
+            "[Audio STT][Proofread] 구간 %s 교정 예외 발생, 원문 유지",
+            page_obj.get("page"),
+        )
+        return page_obj
+
+
+def proofread_pages_with_llm(pages: list[dict], filename: str) -> list[dict]:
+    """전사된 텍스트의 오인식·띄어쓰기·의학용어를 OpenRouter LLM으로 병렬 문맥 교정 (실패 시 원문 폴백)"""
+    if not settings.stt_post_edit or not pages:
         return pages
 
     api_key = (settings.openrouter_api_key or "").strip()
@@ -174,7 +213,7 @@ def _proofread_pages_with_llm(pages: list[dict], filename: str) -> list[dict]:
 
     started_at = time.monotonic()
     logger.info(
-        "[Audio STT][Proofread] 문맥 교정 시작: filename=%s, pages=%d, model=%s",
+        "[Audio STT][Proofread] 병렬 문맥 교정 시작: filename=%s, pages=%d, model=%s",
         filename,
         len(pages),
         settings.openrouter_model,
@@ -195,42 +234,17 @@ def _proofread_pages_with_llm(pages: list[dict], filename: str) -> list[dict]:
         "X-Title": "MedStudy Portal",
     }
 
-    corrected_pages: list[dict] = []
     try:
-        with httpx.Client(timeout=90.0) as client:
-            for p in pages:
-                orig_text = (p.get("text") or "").strip()
-                if not orig_text:
-                    corrected_pages.append(p)
-                    continue
-
-                payload = {
-                    "model": settings.openrouter_model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": orig_text},
-                    ],
-                    "temperature": 0.1,
-                }
-                res = client.post(OPENROUTER_CHAT_URL, headers=headers, json=payload)
-                if res.status_code >= 400:
-                    logger.warning(
-                        "[Audio STT][Proofread] 구간 %s 교정 실패 (status=%d), 원문 유지",
-                        p.get("page"),
-                        res.status_code,
-                    )
-                    corrected_pages.append(p)
-                    continue
-
-                choices = (res.json() or {}).get("choices") or []
-                edited = ((choices[0].get("message") or {}).get("content") or "").strip() if choices else ""
-                if edited:
-                    corrected_pages.append({"page": p["page"], "text": edited})
-                else:
-                    corrected_pages.append(p)
-
+        max_workers = min(4, len(pages))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            corrected_pages = list(
+                executor.map(
+                    lambda p: _proofread_single_page(p, headers, system_prompt),
+                    pages,
+                )
+            )
         logger.info(
-            "[Audio STT][Proofread] 문맥 교정 완료: filename=%s, pages=%d, elapsed=%.2fs",
+            "[Audio STT][Proofread] 병렬 문맥 교정 완료: filename=%s, pages=%d, elapsed=%.2fs",
             filename,
             len(corrected_pages),
             time.monotonic() - started_at,
@@ -324,7 +338,7 @@ def _transcribe_with_groq(file_bytes: bytes, filename: str, mime_type: str) -> l
             len(pages),
             time.monotonic() - started_at,
         )
-        return _proofread_pages_with_llm(pages, filename)
+        return pages
     except Exception:
         logger.exception(
             "[Audio STT][Groq] 전사 중 예외 발생: filename=%s, size=%.2fMB, elapsed=%.2fs",

@@ -156,6 +156,23 @@ class DataStoreService:
         db = self._load_local_db()
         return next((d for d in db["documents"] if d["id"] == doc_id), None)
 
+    def update_document_pages(self, doc_id: str, pages: list[dict]) -> bool:
+        """문서의 페이지별 텍스트(page_contents)를 갱신 (백그라운드 STT 교정 반영용)"""
+        if self._client:
+            self._client.table("documents").update({
+                "page_contents": pages,
+                "total_pages": len(pages),
+            }).eq("id", doc_id).execute()
+            return True
+        db = self._load_local_db()
+        for doc in db["documents"]:
+            if doc["id"] == doc_id:
+                doc["page_contents"] = pages
+                doc["total_pages"] = len(pages)
+                self._save_local_db(db)
+                return True
+        return False
+
     def delete_document(self, doc_id: str) -> bool:
         """문서 DB 행과 Storage 원본 파일을 함께 삭제"""
         if self._client:
