@@ -164,7 +164,7 @@ export default function UploadPage() {
                 <Loader2 className="h-4 w-4 animate-spin" />
                 <span>
                   {/\.(mp3|m4a|wav|webm|ogg)$/i.test(file?.name || "")
-                    ? "음성 전사(Gemini Audio STT) 및 저장 중... (잠시 기다려 주세요)"
+                    ? "음성 전사(Groq Whisper STT) 및 저장 중... (잠시 기다려 주세요)"
                     : "문서 파싱 및 저장 중..."}
                 </span>
               </>

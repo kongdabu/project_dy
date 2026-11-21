@@ -13,11 +13,11 @@ services:
       - key: OPENROUTER_MODEL
         value: qwen/qwen3.7-flash
       - key: STT_PROVIDER
-        value: gemini
-      - key: GEMINI_API_KEY
+        value: groq
+      - key: GROQ_API_KEY
         sync: false
-      - key: GEMINI_STT_MODEL
-        value: gemini-4-hydrogen
+      - key: GROQ_STT_MODEL
+        value: whisper-large-v3-turbo
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_KEY

@@ -57,10 +57,16 @@ def health_check():
     active_model = (
         settings.openrouter_model if provider == "openrouter" else settings.gemini_model
     )
+    stt_provider = (settings.stt_provider or "groq").strip().lower()
+    stt_model = (
+        settings.groq_stt_model if stt_provider == "groq" else settings.gemini_stt_model
+    )
     return {
         "status": "ok",
         "storage_mode": "supabase" if store.is_supabase else "local_fallback",
         "ai_provider": provider,
         "ai_model": active_model,
+        "stt_provider": stt_provider,
+        "stt_model": stt_model,
         "auth_enabled": settings.is_auth_enabled,
     }

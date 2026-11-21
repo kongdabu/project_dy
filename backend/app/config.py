@@ -13,7 +13,10 @@ class Settings(BaseSettings):
     openrouter_model: str = "qwen/qwen3.7-flash"
     gemini_api_key: str = ""
     gemini_model: str = "gemini-4-hydrogen"
-    stt_provider: str = "gemini"
+    stt_provider: str = "groq"
+    groq_api_key: str = ""
+    groq_stt_model: str = "whisper-large-v3-turbo"
+    groq_max_audio_mb: int = 25
     gemini_stt_model: str = "gemini-4-hydrogen"
     supabase_url: str = ""
     supabase_key: str = ""
