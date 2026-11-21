@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -82,9 +83,16 @@ class DataStoreService:
 
     # ---------------- 파일 업로드 ----------------
     def upload_file(self, file_bytes: bytes, filename: str, content_type: str) -> str:
-        """파일을 비공개 Supabase Storage 또는 로컬 디렉토리에 저장하고 객체 경로 반환"""
-        safe_filename = Path(filename).name
-        safe_name = f"{uuid.uuid4().hex}_{safe_filename}"
+        """파일을 비공개 Supabase Storage 또는 로컬 디렉토리에 저장하고 ASCII 안전 객체 경로 반환"""
+        original_path = Path(filename)
+        ext = original_path.suffix.lower().lstrip(".")
+        safe_ext = re.sub(r"[^a-z0-9]", "", ext) or "bin"
+        ascii_stem = re.sub(r"[^A-Za-z0-9_-]", "", original_path.stem)[:40]
+        if ascii_stem:
+            safe_name = f"{uuid.uuid4().hex}_{ascii_stem}.{safe_ext}"
+        else:
+            safe_name = f"{uuid.uuid4().hex}.{safe_ext}"
+
         if self._client:
             self._client.storage.from_(settings.supabase_bucket).upload(
                 path=safe_name,
