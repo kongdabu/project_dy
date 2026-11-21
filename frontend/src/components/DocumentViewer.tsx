@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronLeft, ChevronRight, FileText, Quote, Eye } from "lucide-react";
+import { ChevronLeft, ChevronRight, FileText, Quote, Eye, Volume2 } from "lucide-react";
 import { resolveFileUrl } from "@/lib/api";
 import type { StudyDocument } from "@/lib/types";
+
+const AUDIO_FILE_TYPES = new Set(["mp3", "m4a", "wav", "webm", "ogg"]);
 
 interface DocumentViewerProps {
   doc: StudyDocument;
@@ -18,7 +20,9 @@ export default function DocumentViewer({
   activeQuote,
   onPageChange,
 }: DocumentViewerProps) {
-  const isPdf = doc.file_type.toLowerCase() === "pdf";
+  const fileTypeLower = doc.file_type.toLowerCase();
+  const isPdf = fileTypeLower === "pdf";
+  const isAudio = AUDIO_FILE_TYPES.has(fileTypeLower);
   const [viewMode, setViewMode] = useState<"pdf" | "text">(isPdf ? "pdf" : "text");
 
   const pages = doc.page_contents || [];
@@ -44,7 +48,11 @@ export default function DocumentViewer({
       {/* 상단 컨트롤 바 */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-4 py-2.5">
         <div className="flex items-center gap-2 min-w-0">
-          <FileText className="h-4 w-4 shrink-0 text-teal-600" />
+          {isAudio ? (
+            <Volume2 className="h-4 w-4 shrink-0 text-teal-600" />
+          ) : (
+            <FileText className="h-4 w-4 shrink-0 text-teal-600" />
+          )}
           <span className="truncate text-xs font-bold text-slate-800">{doc.file_name}</span>
         </div>
 
@@ -118,16 +126,33 @@ export default function DocumentViewer({
             title={doc.title}
           />
         ) : (
-          <div className="p-5">
+          <div className="p-5 space-y-4">
+            {isAudio && fileSrc && (
+              <div className="rounded-xl border border-teal-200 bg-white p-4 shadow-xs">
+                <div className="mb-2 flex items-center gap-1.5 text-xs font-bold text-teal-700">
+                  <Volume2 className="h-3.5 w-3.5" />
+                  <span>강의 음성 원본 재생</span>
+                </div>
+                <audio controls src={fileSrc} className="w-full" preload="metadata">
+                  브라우저가 오디오 재생을 지원하지 않습니다.
+                </audio>
+              </div>
+            )}
             <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs">
               <div className="mb-3 flex items-center justify-between border-b border-slate-100 pb-2">
-                <span className="text-xs font-bold text-teal-700">Page {activePage} 추출 텍스트</span>
-                <span className="text-[11px] text-slate-400">{doc.file_type.toUpperCase()} 색인</span>
+                <span className="text-xs font-bold text-teal-700">
+                  {isAudio ? `구간 ${activePage} 음성 전사 텍스트` : `Page ${activePage} 추출 텍스트`}
+                </span>
+                <span className="text-[11px] text-slate-400">
+                  {isAudio ? `${doc.file_type.toUpperCase()} 음성 전사` : `${doc.file_type.toUpperCase()} 색인`}
+                </span>
               </div>
               <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-slate-700">
                 {currentPageObj?.text
                   ? highlightText(currentPageObj.text, activeQuote)
-                  : "이 페이지에서 추출된 텍스트가 없습니다."}
+                  : isAudio
+                    ? "이 구간에서 전사된 텍스트가 없습니다."
+                    : "이 페이지에서 추출된 텍스트가 없습니다."}
               </pre>
             </div>
           </div>

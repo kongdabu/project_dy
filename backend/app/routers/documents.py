@@ -3,8 +3,9 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from app.config import settings
+from app.services.audio_service import get_audio_mime_type
 from app.services.auth_service import require_auth
-from app.services.document_parser import parse_document_bytes, validate_file_extension
+from app.services.document_parser import is_audio_extension, parse_document_bytes, validate_file_extension
 from app.services.supabase_service import store
 
 logger = logging.getLogger(__name__)
@@ -43,13 +44,20 @@ async def upload_document(
     try:
         pages, ext, total_pages = parse_document_bytes(file_bytes, file.filename)
     except ValueError as exc:
+        logger.warning("자료 업로드 파싱 400 오류 (%s): %s", file.filename, exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception:
-        logger.exception("문서 파싱 실패: %s", file.filename)
-        raise HTTPException(status_code=400, detail="문서를 읽을 수 없습니다. 손상되지 않은 파일인지 확인해 주세요.")
+        logger.exception("문서/음성 파싱 실패: %s", file.filename)
+        raise HTTPException(
+            status_code=400,
+            detail="파일을 읽거나 전사할 수 없습니다. 손상되지 않은 파일인지 확인해 주세요.",
+        )
 
     doc_title = (title or "").strip() or file.filename.rsplit(".", 1)[0]
-    content_type = file.content_type or "application/octet-stream"
+    if is_audio_extension(ext):
+        content_type = get_audio_mime_type(ext)
+    else:
+        content_type = file.content_type or "application/octet-stream"
     file_url = store.upload_file(file_bytes, file.filename, content_type)
 
     doc_record = store.create_document({

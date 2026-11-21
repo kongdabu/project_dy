@@ -4,28 +4,42 @@ import pymupdf
 from docx import Document as DocxDocument
 from pptx import Presentation
 from app.config import settings
+from app.services.audio_service import AUDIO_MIME_TYPES, transcribe_audio_bytes
 
-ALLOWED_EXTENSIONS = {"pdf", "docx", "doc", "pptx", "txt", "md"}
+AUDIO_EXTENSIONS = set(AUDIO_MIME_TYPES.keys())
+DOCUMENT_EXTENSIONS = {"pdf", "docx", "doc", "pptx", "txt", "md"}
+ALLOWED_EXTENSIONS = DOCUMENT_EXTENSIONS | AUDIO_EXTENSIONS
+ALLOWED_LABEL = "PDF, DOCX, PPTX, TXT, MD, MP3, M4A, WAV, WEBM, OGG"
+
+
+def is_audio_extension(ext: str) -> bool:
+    """음성 파일 확장자 여부 반환"""
+    return ext.lower() in AUDIO_EXTENSIONS
 
 
 def validate_file_extension(filename: str) -> str:
-    """허용된 학습 자료 확장자인지 검증한다."""
+    """허용된 학습 자료(문서 및 음성) 확장자인지 검증한다."""
     if "." not in filename:
-        raise ValueError("파일 확장자가 없습니다. (허용: PDF, DOCX, PPTX, TXT, MD)")
+        raise ValueError(f"파일 확장자가 없습니다. (허용: {ALLOWED_LABEL})")
     ext = filename.rsplit(".", 1)[-1].lower()
     if ext not in ALLOWED_EXTENSIONS:
-        raise ValueError(f"지원하지 않는 파일 형식(.{ext})입니다. (허용: PDF, DOCX, PPTX, TXT, MD)")
+        raise ValueError(f"지원하지 않는 파일 형식(.{ext})입니다. (허용: {ALLOWED_LABEL})")
     return ext
 
 
 def parse_document_bytes(file_bytes: bytes, filename: str) -> Tuple[list[dict], str, int]:
     """
-    업로드된 파일 바이트(PDF, DOCX, PPTX, TXT/MD)에서 페이지/슬라이드별 텍스트를 추출한다.
+    업로드된 파일 바이트(PDF, DOCX, PPTX, TXT/MD, 음성 파일)에서
+    페이지/슬라이드/타임스탬프 구간별 텍스트를 추출한다.
     최대 페이지 수 제한을 초과하면 예외를 발생시킨다.
     """
     ext = validate_file_extension(filename)
     pages: list[dict] = []
     max_pages = settings.max_document_pages
+
+    if is_audio_extension(ext):
+        pages = transcribe_audio_bytes(file_bytes, filename)
+        return pages, ext, len(pages)
 
     if ext == "pdf":
         with pymupdf.open(stream=file_bytes, filetype="pdf") as pdf_doc:

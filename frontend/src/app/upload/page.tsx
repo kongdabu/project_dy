@@ -57,7 +57,7 @@ export default function UploadPage() {
       <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-xs sm:p-8">
         <h1 className="text-xl font-bold text-slate-900">학습 자료 업로드</h1>
         <p className="mt-1 text-sm text-slate-500">
-          수업 교안(PDF, PPTX), 의학 논문(PDF), 리포트(DOCX), 필기 노트(TXT, MD)를 업로드하면 페이지별로 자동 색인됩니다.
+          수업 교안(PDF, PPTX), 의학 논문(PDF), 리포트(DOCX), 필기 노트(TXT, MD), 강의 녹음(MP3, M4A, WAV, WEBM, OGG)을 업로드하면 자동으로 색인·전사됩니다.
         </p>
 
         <form onSubmit={handleSubmit} className="mt-6 space-y-5">
@@ -92,7 +92,7 @@ export default function UploadPage() {
                   다른 파일 선택
                   <input
                     type="file"
-                    accept=".pdf,.docx,.doc,.pptx,.txt,.md"
+                    accept=".pdf,.docx,.doc,.pptx,.txt,.md,.mp3,.m4a,.wav,.webm,.ogg,audio/*"
                     className="hidden"
                     onChange={(e) => handleFileSelect(e.target.files?.[0] || null)}
                   />
@@ -104,12 +104,14 @@ export default function UploadPage() {
                 <p className="mt-3 text-sm font-semibold text-slate-700">
                   파일을 여기에 끌어다 놓거나 클릭하여 선택하세요
                 </p>
-                <p className="mt-1 text-xs text-slate-500">지원 포맷: PDF, PPTX, DOCX, TXT, MD</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  지원 포맷: PDF, PPTX, DOCX, TXT, MD, MP3, M4A, WAV, WEBM, OGG
+                </p>
                 <label className="mt-4 cursor-pointer rounded-xl bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-xs ring-1 ring-slate-200 hover:bg-slate-50">
                   파일 찾아보기
                   <input
                     type="file"
-                    accept=".pdf,.docx,.doc,.pptx,.txt,.md"
+                    accept=".pdf,.docx,.doc,.pptx,.txt,.md,.mp3,.m4a,.wav,.webm,.ogg,audio/*"
                     className="hidden"
                     onChange={(e) => handleFileSelect(e.target.files?.[0] || null)}
                   />
@@ -160,7 +162,11 @@ export default function UploadPage() {
             {uploading ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                <span>문서 파싱 및 저장 중...</span>
+                <span>
+                  {/\.(mp3|m4a|wav|webm|ogg)$/i.test(file?.name || "")
+                    ? "음성 전사(Gemini Audio STT) 및 저장 중... (잠시 기다려 주세요)"
+                    : "문서 파싱 및 저장 중..."}
+                </span>
               </>
             ) : (
               <span>업로드하고 학습 스튜디오 열기</span>
