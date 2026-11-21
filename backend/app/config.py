@@ -15,8 +15,10 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-4-hydrogen"
     stt_provider: str = "groq"
     groq_api_key: str = ""
-    groq_stt_model: str = "whisper-large-v3-turbo"
+    groq_stt_model: str = "whisper-large-v3"
     groq_max_audio_mb: int = 25
+    stt_language: str = "ko"
+    stt_post_edit: bool = True
     gemini_stt_model: str = "gemini-4-hydrogen"
     supabase_url: str = ""
     supabase_key: str = ""

@@ -17,7 +17,11 @@ services:
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_STT_MODEL
-        value: whisper-large-v3-turbo
+        value: whisper-large-v3
+      - key: STT_LANGUAGE
+        value: ko
+      - key: STT_POST_EDIT
+        value: "true"
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_KEY

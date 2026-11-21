@@ -11,6 +11,18 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 GROQ_TRANSCRIPTIONS_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+# Whisper 무음 구간에서 자주 발생하는 대표 환각 문구
+WHISPER_HALLUCINATION_PHRASES = (
+    "시청해 주셔서 감사합니다",
+    "구독과 좋아요",
+    "좋아요와 구독",
+    "MBC 뉴스",
+    "KBS 뉴스",
+    "SBS 뉴스",
+    "영상 편집",
+)
 
 AUDIO_MIME_TYPES: dict[str, str] = {
     "mp3": "audio/mpeg",
@@ -115,18 +127,137 @@ def _segments_to_pages(segments: list[TranscriptSegment], max_pages: int, chunk_
     return pages
 
 
+def _filter_whisper_segments(raw_segments: list[dict]) -> tuple[list[TranscriptSegment], int]:
+    """무음·잡음 기반 Whisper 환각 세그먼트를 필터링하고 유효 세그먼트 목록과 제거 건수를 반환"""
+    kept: list[TranscriptSegment] = []
+    fallback_all: list[TranscriptSegment] = []
+    dropped = 0
+
+    for item in raw_segments:
+        text = (item.get("text") or "").strip()
+        if not text:
+            continue
+        seg = TranscriptSegment(
+            start_time=_format_seconds_mmss(item.get("start", 0.0)),
+            end_time=_format_seconds_mmss(item.get("end", 0.0)),
+            text=text,
+        )
+        fallback_all.append(seg)
+
+        no_speech_prob = float(item.get("no_speech_prob") or 0.0)
+        avg_logprob = float(item.get("avg_logprob") or 0.0)
+        is_known_hallucination = any(phrase in text for phrase in WHISPER_HALLUCINATION_PHRASES)
+
+        if no_speech_prob >= 0.8 or (is_known_hallucination and no_speech_prob >= 0.4):
+            dropped += 1
+            continue
+        if avg_logprob <= -1.2 and no_speech_prob >= 0.5:
+            dropped += 1
+            continue
+        kept.append(seg)
+
+    if not kept and fallback_all:
+        # 전체 녹음이 조용해 모두 필터링된 경우 원본 세그먼트 유지
+        return fallback_all, 0
+    return kept, dropped
+
+
+def _proofread_pages_with_llm(pages: list[dict], filename: str) -> list[dict]:
+    """전사된 텍스트의 오인식·띄어쓰기·의학용어를 OpenRouter LLM으로 문맥 교정 (실패 시 원문 폴백)"""
+    if not settings.stt_post_edit:
+        return pages
+
+    api_key = (settings.openrouter_api_key or "").strip()
+    if not api_key or "your_openrouter_api_key" in api_key:
+        logger.info("[Audio STT][Proofread] OPENROUTER_API_KEY 미설정으로 전사 후교정 생략")
+        return pages
+
+    started_at = time.monotonic()
+    logger.info(
+        "[Audio STT][Proofread] 문맥 교정 시작: filename=%s, pages=%d, model=%s",
+        filename,
+        len(pages),
+        settings.openrouter_model,
+    )
+
+    system_prompt = (
+        "당신은 한국어 의학·전문 강의 음성 전사(STT) 전문 교정가입니다.\n"
+        "[규칙]\n"
+        "1. 각 줄 앞의 타임스탬프 태그([MM:SS ~ MM:SS])는 절대 삭제하거나 변경하지 마세요.\n"
+        "2. 음성 인식 오류로 깨진 한국어 오타, 띄어쓰기, 발음대로 잘못 적힌 의학/전문 용어만 문맥에 맞게 자연스럽게 교정하세요.\n"
+        "3. 내용을 요약하거나 임의로 생략·추가하지 말고 원문 발화 흐름을 최대한 보존하세요.\n"
+        "4. 교정된 전사 본문만 출력하고 설명이나 마크다운 코드블록을 붙이지 마세요."
+    )
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://medstudy-portal.local",
+        "X-Title": "MedStudy Portal",
+    }
+
+    corrected_pages: list[dict] = []
+    try:
+        with httpx.Client(timeout=90.0) as client:
+            for p in pages:
+                orig_text = (p.get("text") or "").strip()
+                if not orig_text:
+                    corrected_pages.append(p)
+                    continue
+
+                payload = {
+                    "model": settings.openrouter_model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": orig_text},
+                    ],
+                    "temperature": 0.1,
+                }
+                res = client.post(OPENROUTER_CHAT_URL, headers=headers, json=payload)
+                if res.status_code >= 400:
+                    logger.warning(
+                        "[Audio STT][Proofread] 구간 %s 교정 실패 (status=%d), 원문 유지",
+                        p.get("page"),
+                        res.status_code,
+                    )
+                    corrected_pages.append(p)
+                    continue
+
+                choices = (res.json() or {}).get("choices") or []
+                edited = ((choices[0].get("message") or {}).get("content") or "").strip() if choices else ""
+                if edited:
+                    corrected_pages.append({"page": p["page"], "text": edited})
+                else:
+                    corrected_pages.append(p)
+
+        logger.info(
+            "[Audio STT][Proofread] 문맥 교정 완료: filename=%s, pages=%d, elapsed=%.2fs",
+            filename,
+            len(corrected_pages),
+            time.monotonic() - started_at,
+        )
+        return corrected_pages
+    except Exception:
+        logger.exception(
+            "[Audio STT][Proofread] 교정 중 예외 발생 (원문 유지 폴백): filename=%s",
+            filename,
+        )
+        return pages
+
+
 def _transcribe_with_groq(file_bytes: bytes, filename: str, mime_type: str) -> list[dict]:
-    """Groq Whisper API(whisper-large-v3-turbo)로 음성을 전사하고 구간별 page_contents 반환"""
+    """Groq Whisper API(whisper-large-v3)로 음성을 전사하고 구간별 page_contents 반환"""
     started_at = time.monotonic()
     size_mb = len(file_bytes) / (1024 * 1024)
     max_groq_bytes = settings.groq_max_audio_mb * 1024 * 1024
+    lang = (settings.stt_language or "").strip()
 
     logger.info(
-        "[Audio STT][Groq] 전사 시작: filename=%s, mime=%s, size=%.2fMB, model=%s",
+        "[Audio STT][Groq] 전사 시작: filename=%s, mime=%s, size=%.2fMB, model=%s, language=%s",
         filename,
         mime_type,
         size_mb,
         settings.groq_stt_model,
+        lang or "auto",
     )
 
     if len(file_bytes) > max_groq_bytes:
@@ -138,12 +269,13 @@ def _transcribe_with_groq(file_bytes: bytes, filename: str, mime_type: str) -> l
     api_key = _get_groq_api_key()
     headers = {"Authorization": f"Bearer {api_key}"}
     files = {"file": (filename, file_bytes, mime_type)}
-    data = {
+    data: dict[str, str] = {
         "model": settings.groq_stt_model,
         "response_format": "verbose_json",
         "temperature": "0",
-        "prompt": "의과대학 강의 녹음입니다. 한국어 설명과 영어 의학 전문용어(질환명, 해부학, 약물명)를 정확히 표기하세요.",
     }
+    if lang:
+        data["language"] = lang
 
     try:
         req_started_at = time.monotonic()
@@ -171,19 +303,10 @@ def _transcribe_with_groq(file_bytes: bytes, filename: str, mime_type: str) -> l
         payload = res.json()
         raw_segments = payload.get("segments") or []
         segments: list[TranscriptSegment] = []
+        dropped_count = 0
 
         if raw_segments:
-            for item in raw_segments:
-                text = (item.get("text") or "").strip()
-                if not text:
-                    continue
-                segments.append(
-                    TranscriptSegment(
-                        start_time=_format_seconds_mmss(item.get("start", 0.0)),
-                        end_time=_format_seconds_mmss(item.get("end", 0.0)),
-                        text=text,
-                    )
-                )
+            segments, dropped_count = _filter_whisper_segments(raw_segments)
         else:
             full_text = (payload.get("text") or "").strip()
             if full_text:
@@ -194,13 +317,14 @@ def _transcribe_with_groq(file_bytes: bytes, filename: str, mime_type: str) -> l
 
         pages = _segments_to_pages(segments, max_pages=settings.max_document_pages)
         logger.info(
-            "[Audio STT][Groq] 전사 완료: filename=%s, segments=%d, pages=%d, total_elapsed=%.2fs",
+            "[Audio STT][Groq] 전사 완료: filename=%s, segments=%d, dropped_hallucinations=%d, pages=%d, stt_elapsed=%.2fs",
             filename,
             len(segments),
+            dropped_count,
             len(pages),
             time.monotonic() - started_at,
         )
-        return pages
+        return _proofread_pages_with_llm(pages, filename)
     except Exception:
         logger.exception(
             "[Audio STT][Groq] 전사 중 예외 발생: filename=%s, size=%.2fMB, elapsed=%.2fs",
