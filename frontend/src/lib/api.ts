@@ -43,11 +43,19 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers.set("Content-Type", "application/json");
   }
 
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    ...options,
-    headers,
-    cache: "no-store",
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      headers,
+      cache: "no-store",
+    });
+  } catch (err) {
+    const rawMsg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `서버 연결이 중단되었습니다 (${rawMsg}). 파일 용량이 크거나 음성 전사 처리 시간이 길어 연결이 끊어졌을 수 있습니다. 잠시 후 다시 시도하거나 서버 로그를 확인해 주세요.`
+    );
+  }
 
   if (res.status === 401 && path !== "/api/auth/login") {
     clearAuthToken();
